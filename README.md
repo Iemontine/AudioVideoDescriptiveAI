@@ -20,6 +20,6 @@
     * NOTE: You may need to manually install some libraries that cause errors during installation.
 * #### Setting up OpenAI API Token
     * Make an account on https://platform.openai.com
-    * Obtain your API key, and register it using the following command
+    * Obtain your API key, and register it on your system using the following command
     * ```export OPENAI_API_KEY="your_api_key_here"```
 </details>
