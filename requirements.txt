@@ -1,4 +1,17 @@
 moviepy==1.0.3
+numpy==1.23
 opencv-python==4.10.0.84
-numpy==2.1.0
 openai==1.42.0
+yt-dlp==2024.8.6
+pillow==10.4.0
+ipython>=8.26.0
+ipykernel>=6.29.5
+
+# occasionally running pip uninstall ffmpeg moviepy can fix issues with moviepy
+
+# ensure you have CUDA 12.1 on your machine. manually install torch, torchaudio, and torchvision if you do not have an NVIDIA GPU/do not use Google Colab.
+# Certain CSIF computers have NVIDIA GPUs, so connecting to them is an alternate option.
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.3.0+cu121
+torchaudio==2.3.0+cu121
+torchvision==0.18.0+cu121
