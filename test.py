@@ -1,51 +1,63 @@
-from train import AudioClassifier
-from train import label_map
 import torch
-import librosa
-import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from sklearn.metrics import accuracy_score, f1_score
 import numpy as np
-import json
-import joblib
+from train import AudioDataset, AudioClassifier, label_map
 
-def predict_audio(model, audio_path, fixed_length=224):
-    # load the audio file
-    y, sr = librosa.load(audio_path, sr=16000, duration=10.0)
-    
-    # convert to log mel spectrogram
-    mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, hop_length=512)
-    log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
-    
-    # convert to tensor, adding channel dimension
-    log_mel_spec = torch.tensor(log_mel_spec, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    
-    # pad or truncate to a fixed length (for consistency in the input to nn)
-    fixed_length = 224
-    if log_mel_spec.shape[-1] > fixed_length:
-        log_mel_spec = log_mel_spec[:, :, :fixed_length]    # truncate if too long
-    else:
-        pad_width = fixed_length - log_mel_spec.shape[-1]
-        log_mel_spec = F.pad(log_mel_spec, (0, pad_width))  # pad if too short
-    
-    # make prediction using the model
-    model.eval()
-    with torch.no_grad():
-        output = model(log_mel_spec)
-    _, predicted = torch.max(output, 1)
-    return predicted.item()
+def evaluate_model(model, dataloader, device):
+    model.eval()  # evaluation mode
+    all_preds = []
+    all_labels = []
+    pred_integers = []
+    label_integers = []
 
-# load ontology
-with open('ontology.json') as f:
-    ontology_data = json.load(f)
+    with torch.no_grad():  # disable gradient computation (?)
+        for idx, (inputs, labels) in enumerate(dataloader):
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
 
-model = AudioClassifier(num_classes=len(label_map))
-model.load_state_dict(torch.load("./models/model.pth"))
-audio_path = "./sound/EkmKuR0RkZM.wav"  # TODO: currently loading something from the trainnig set, change this
-predicted_label = predict_audio(model, audio_path)
+            # sigmoid to get probabilities and then threshold to get binary predictions
+            preds = torch.sigmoid(outputs) >= 0.35
+            preds = preds.cpu().numpy()
+            labels = labels.cpu().numpy()
 
-# load the label encoder to find the original label
-label_encoder = joblib.load("./models/label_encoder.pkl")
-original_label = label_encoder.inverse_transform([predicted_label])[0]
-id_to_name = {item['id']: item['name'] for item in ontology_data}
-predicted_name = id_to_name.get(original_label, "Unknown Label")
-print(f"Predicted label: {original_label}")
-print(f"Predicted class: {predicted_name}")
+            # convert binary predictions and labels to their integer representations
+            # TODO: convert predictions not into integers but to label from label_map
+            for pred, label in zip(preds, labels):
+                pred_integer = np.argmax(pred)
+                label_integer = np.argmax(label)
+                pred_integers.append(pred_integer)
+                label_integers.append(label_integer)
+                print(pred_integer, label_integer)
+
+            all_preds.append(preds)
+            all_labels.append(labels)
+
+    all_preds = np.vstack(all_preds)
+    all_labels = np.vstack(all_labels)
+    
+    overall_accuracy = accuracy_score(label_integers, pred_integers)
+    overall_f1 = f1_score(label_integers, pred_integers, average='weighted')
+    
+    return overall_accuracy, overall_f1, pred_integers, label_integers
+
+if __name__ == "__main__":
+    batch_size = 8
+    target_length = 600
+    model_path = './models/model_checkpoint_e7.pth'
+
+    dataset = 'balanced_train_segments'
+    test_dataset = AudioDataset(f'./data/{dataset}.csv', f'./sounds_{dataset}', label_map, target_length=target_length)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    model = AudioClassifier(num_classes=len(label_map))
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    model = model.to(device)
+
+    model.load_state_dict(torch.load(model_path))
+
+    accuracy, f1, pred_integers, label_integers = evaluate_model(model, test_dataloader, device)
+    print(f"Test Accuracy: {accuracy:.4f}")
+    print(f"Test F1 Score: {f1:.4f}")

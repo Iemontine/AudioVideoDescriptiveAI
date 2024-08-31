@@ -1,17 +1,18 @@
-import json
-import torch
-from sklearn.preprocessing import LabelEncoder
-from torch.utils.data import Dataset, DataLoader
-import torch.nn as nn
-import torch.nn.functional as F
-import librosa
-import numpy as np
-import torch.optim as optim
 import os
+import json
+import torchaudio
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from torchvision.models import resnet18, ResNet18_Weights
+from torchaudio.transforms import MelSpectrogram, AmplitudeToDB
+from sklearn.preprocessing import MultiLabelBinarizer, LabelEncoder
 import joblib
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-# load ontology
+# 1. Load data
 with open('ontology.json') as f:
     ontology_data = json.load(f)
 
@@ -19,7 +20,7 @@ with open('ontology.json') as f:
 ids = []
 for item in ontology_data:
     ids.append(item['id'])
-    ids.extend(item['child_ids'])
+    # ids.extend(item['child_ids'])   # TODO: investigate removal of child_ids
 
 # remove duplicates
 ids = list(set(ids))
@@ -29,158 +30,208 @@ label_encoder = LabelEncoder()
 encoded_labels = label_encoder.fit_transform(ids)
 joblib.dump(label_encoder, "label_encoder.pkl")
 
-# TODO: ensure one-hot encoded labels, can't tell if i did this correctly or not
+# map labels to one-hot encoded vectors
 label_map = dict(zip(ids, encoded_labels))
 
+# 2. Dataset Loader
 class AudioDataset(Dataset):
-    def __init__(self, csv_file, audio_dir, label_map, transform=None):
+    def __init__(self, csv_file, audio_dir, label_map, target_length):
         self.audio_dir = audio_dir
-        self.transform = transform
-        self.load_csv(csv_file)     # initializes the dataset
+        self.label_map = label_map
+        self.target_length = target_length
 
-    def __len__(self):
-        return len(self.data)
-
-    # load and preprocess the audio file
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        file_path = os.path.join(self.audio_dir, item['ytid'] + '.flac')
-        labels = torch.tensor(item['labels'], dtype=torch.long)
-
-        # load the audio file
-        y, sr = librosa.load(file_path, sr=16000, duration=10.0)
-        start_sample = int(item['start_sec'] * sr)
-        end_sample = int(item['end_sec'] * sr)
-        y = y[start_sample:end_sample]
-
-        # convert to log mel spectrogram
-        mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, hop_length=512)
-        log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
-        
-        # convert to tensor, adding channel dimension
-        log_mel_spec = torch.tensor(log_mel_spec, dtype=torch.float32).unsqueeze(0) 
-
-        # pad or truncate to a fixed length (for consistency in the input to nn)
-        fixed_length = 224
-        if log_mel_spec.shape[-1] > fixed_length:
-            log_mel_spec = log_mel_spec[:, :, :fixed_length]    # truncate if too long
-        else:
-            pad_width = fixed_length - log_mel_spec.shape[-1]
-            log_mel_spec = F.pad(log_mel_spec, (0, pad_width))  # pad if too short
-
-        # create a one-hot encoded label vector (supposedly)
-        one_hot_labels = torch.zeros(len(label_map), dtype=torch.float32)
-        one_hot_labels[labels] = 1.0
-
-        return log_mel_spec, one_hot_labels
-    
-    # intializes the dataset by loading the labels and audio files from the csv
-    def load_csv(self, csv_file):
+        # parse the CSV file
         with open(csv_file, 'r') as f:
             lines = f.readlines()[3:]  # skip header lines
             self.data = []
             for line in lines:
-                # parse data
                 parts = line.strip().split(', ')
                 ytid = parts[0]
                 start_sec = float(parts[1])
                 end_sec = float(parts[2])
-                pos_labels = [i.replace("\"", "") for i in parts[3].split(',')]
+                labels = [i.replace("\"", "") for i in parts[3].split(',')]
+                self.data.append((ytid, start_sec, end_sec, labels))
 
-                # filter out labels not in the ontology
-                labels = [label_map[label] for label in pos_labels if label in label_map]
-                
-                if labels:
-                    file_path = os.path.join(self.audio_dir, ytid + '.flac')
-                    # append to data if the file exists
-                    if os.path.exists(file_path):
-                        self.data.append({
-                            'ytid': ytid,
-                            'start_sec': start_sec,
-                            'end_sec': end_sec,
-                            'labels': labels
-                        })
         print(f"Loaded {len(self.data)} samples from dataset")
+        self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if os.path.exists(os.path.join(self.audio_dir, f"{ytid}.flac"))]
+        print(f"Filtered to {len(self.data)} samples with audio files")
 
-class ClassifierNetwork(nn.Module):
-    # define the network architecture
+        # TODO: this isn't working, investigate why
+        # # remove labels with less than 100 examples or more than 500 examples
+        # # Count the number of examples for each label
+        # label_count = {}
+        # for _, _, _, labels in self.data:
+        #     for label in labels:
+        #         if label in label_count:
+        #             label_count[label] += 1
+        #         else:
+        #             label_count[label] = 1
+        # filtered_labels = [label for label, count in label_count.items() if 100 <= count <= 500]
+        # self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if any(label in filtered_labels for label in labels)]
+        # print(f"Filtered to {len(self.data)} samples with valid label counts")
+
+        label_count = {}
+        for _, _, _, labels in self.data:
+            for label in labels:
+                if label in label_count:
+                    label_count[label] += 1
+                else:
+                    label_count[label] = 1
+
+        # one-hot-encoded labels
+        self.mlb = MultiLabelBinarizer(classes=list(self.label_map.keys()))
+        self.mlb.fit(self.data_labels())
+        print()
+
+    def data_labels(self):
+        return [labels for _, _, _, labels in self.data]
+
+    def __len__(self):
+        return len(self.data)
+    
+    # preprocesses the audio data, returns mel spectrogram and one-hot encoded labels
+    def __getitem__(self, idx):
+        ytid, start_sec, end_sec, labels = self.data[idx]
+        audio_path = os.path.join(self.audio_dir, f"{ytid}.flac")
+        waveform, sample_rate = torchaudio.load(audio_path, normalize=True)
+        if waveform.shape[0] > 1:    # Convert waveform to mono if it has multiple channels
+            waveform = torch.mean(waveform, dim=0)
+        transform = nn.Sequential(
+            MelSpectrogram(sample_rate=16000, n_mels=128, n_fft=2048, hop_length=512),
+            AmplitudeToDB()
+        )
+
+        # TODO: investigate feature masking to improve quality of data?
+
+        # # Plot the waveform
+        # plt.figure(figsize=(10, 5))
+        # plt.plot(waveform[0].numpy())
+        # plt.title(f'Waveform of File: {ytid} of length {end_sec - start_sec} seconds')
+        # plt.xlabel('Time (samples)')
+        # plt.ylabel('Amplitude')
+        # plt.show()
+
+        # convert waveform to mel spectrogram
+        mel_spectrogram = transform(waveform)
+
+        # add the channel dimension if not present (needed for CNN)
+        if mel_spectrogram.dim() == 2:
+            mel_spectrogram = mel_spectrogram.unsqueeze(0)  
+
+        # resize the mel spectrogram to the target length
+        if mel_spectrogram.shape[2] < self.target_length:   # pad if too short
+            padding = self.target_length - mel_spectrogram.shape[2]
+            mel_spectrogram = torch.nn.functional.pad(mel_spectrogram, (0, padding))
+        elif mel_spectrogram.shape[2] > self.target_length: # truncate if too long
+            mel_spectrogram = mel_spectrogram[:, :, :self.target_length]
+
+        # print(f"Shape of mel_spectrogram: {mel_spectrogram.shape}")
+        # print(labels)
+        # print(f"hmm: {mel_spectrogram[0]}")
+
+        # # Graph the mel spectrogram
+        # mel_spectrogram_np = mel_spectrogram[0].detach().numpy()
+        # plt.figure(figsize=(10, 5))
+        # plt.imshow(mel_spectrogram_np, aspect='auto', origin='lower',
+        #         extent=[0, mel_spectrogram_np.shape[1], 0, mel_spectrogram_np.shape[0]])
+        # plt.colorbar(format='%+2.0f dB')
+        # plt.title(f'Mel Spectrogram of File: {ytid} of length {end_sec - start_sec} seconds')
+        # plt.xlabel('Time (frames)')
+        # plt.ylabel('Mel Frequency (bins)')
+        # plt.show()
+
+        # convert labels to float tensor
+        labels = self.mlb.transform([labels])[0]  # Get the binary labels
+        labels = torch.FloatTensor(labels)  # Convert to float tensor
+
+        return mel_spectrogram, labels
+
+# 3. Model Architecture
+class AudioClassifier(nn.Module):
     def __init__(self, num_classes):
-        super(ClassifierNetwork, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        self.bn3 = nn.BatchNorm2d(128)
-        self.pool = nn.MaxPool2d(kernel_size=(2, 2), stride=(2, 2))
-        self.global_pool = nn.AdaptiveAvgPool2d(1)
-        self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(128, 128)
-        self.fc2 = nn.Linear(128, num_classes)
+        super(AudioClassifier, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=64, kernel_size=(3, 3), padding=(1, 1))
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=(3, 3), padding=(1, 1))
+        self.conv3 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=(3, 3), padding=(1, 1))
+        self.bn1 = nn.BatchNorm2d(64)
+        self.bn2 = nn.BatchNorm2d(128)
+        self.bn3 = nn.BatchNorm2d(256)
+        self.pool = nn.MaxPool2d(kernel_size=(2, 2))
+        self.dropout = nn.Dropout(p=0.5)
+        self.fc1 = nn.Linear(256 * 16 * 75, 512)
+        self.fc2 = nn.Linear(512, num_classes)
 
-    # forward pass through layers
     def forward(self, x):
-        x = self.pool(F.relu(self.bn1(self.conv1(x))))
-        x = self.pool(F.relu(self.bn2(self.conv2(x))))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = self.global_pool(x)
-        x = x.view(x.size(0), -1)
-        x = F.relu(self.fc1(x))
+        # TODO: reevaluate architecture
+        x = self.pool(nn.ReLU()(self.bn1(self.conv1(x))))
+        x = self.pool(nn.ReLU()(self.bn2(self.conv2(x))))
+        x = self.pool(nn.ReLU()(self.bn3(self.conv3(x))))
+        x = x.view(x.size(0), -1)  # flatten
+        x = nn.ReLU()(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
-        return x
+        
+        return x  # returns logits
 
-def main():
-    # initialize the dataset and dataloader
-    csv_file = './data/balanced_train_segments.csv'
-    audio_dir = './sounds_balanced_train_segments/'
-    train_dataset = AudioDataset(csv_file=csv_file, audio_dir=audio_dir, label_map=label_map)
-    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
 
-    # initialize the model, loss function, and optimizer
-    num_classes = len(label_map)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    model = ClassifierNetwork(num_classes=num_classes).to(device)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+batch_losses = []
+def init_plot():
+    plt.ion()
+    plt.figure(figsize=(10, 5))
+    plt.title("Batch Loss Over Time")
+    plt.xlabel("Iterations")
+    plt.ylabel("Batch Loss")
+    plt.ylim(0, 1)
+    plt.grid()
+def update_plot(loss):
+    batch_losses.append(loss)
+    plt.clf()
+    plt.plot(batch_losses, label='Epoch Loss', color='blue')
+    plt.title("Batch Loss Over Time")
+    plt.xlabel("Batch")
+    plt.ylabel("Batch Loss")
+    plt.ylim(0, 1)
+    plt.grid()
+    plt.legend()
+    plt.pause(0.01)
 
-    # learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
-
-    # list to store loss values for each epoch
-    loss_values = []
-    # training loop
-    num_epochs = 12
+# 4. Training Loop
+def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs):
+    init_plot()  # Initialize the plot
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
-        for inputs, labels in train_loader:
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{num_epochs}", leave=True)
+        for inputs, labels in progress_bar:
             inputs, labels = inputs.to(device), labels.to(device)   # move tensors to GPU 
             optimizer.zero_grad()                                   # zero the parameter gradients
             outputs = model(inputs)                                 # forward pass
             loss = criterion(outputs, labels)                       # compute the loss
             loss.backward()                                         # backward pass
             optimizer.step()                                        # optimize the network's weights
-            running_loss += loss.item()
 
-        epoch_loss = running_loss / len(train_loader)
-        loss_values.append(epoch_loss)
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}")
+            # track statistics (TODO: not even sure this is working correctly, loss converges to 0 but model can't predict anything)
+            batch_loss = loss.item()
+            running_loss += loss.item() * inputs.size(0)
+            progress_bar.set_postfix(loss=batch_loss)
+            update_plot(batch_loss)
         scheduler.step()
-        
-    torch.save(model.state_dict(), "./models/model.pth")
-    
-    plt.figure()
-    plt.plot(range(1, num_epochs + 1), loss_values, label='Training Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.title('Training Loss over Epochs')
-    plt.legend()
-    plt.show()
-
-    # save plot to ./plots
-    plt.savefig('./plots/training_loss.png')
+        epoch_loss = running_loss / len(dataloader.dataset)
+        torch.save(model.state_dict(), f'./models/model_checkpoint_e{epoch}.pth')
+    torch.save(model.state_dict(), './models/model.pth')
 
 if __name__ == "__main__":
-    main()
+    source = 'balanced_train_segments'
+    dataset = AudioDataset(f'./data/{source}.csv', f'./sounds_{source}', label_map, target_length=600)
+    dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
+
+    model = AudioClassifier(num_classes=len(label_map))
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    model = model.to(device)
+
+    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=10)
