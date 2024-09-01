@@ -17,7 +17,7 @@ def evaluate_model(model, dataloader, device):
             outputs = model(inputs)
 
             # sigmoid to get probabilities and then threshold to get binary predictions
-            preds = torch.sigmoid(outputs) >= 0.35
+            preds = torch.sigmoid(outputs) >= 0.01
             preds = preds.cpu().numpy()
             labels = labels.cpu().numpy()
 
@@ -28,7 +28,7 @@ def evaluate_model(model, dataloader, device):
                 label_integer = np.argmax(label)
                 pred_integers.append(pred_integer)
                 label_integers.append(label_integer)
-                print(pred_integer, label_integer)
+                print(pred_integer, label_integer, pred_integer == label_integer)
 
             all_preds.append(preds)
             all_labels.append(labels)
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     model_path = './models/model_checkpoint_e7.pth'
 
     dataset = 'balanced_train_segments'
-    test_dataset = AudioDataset(f'./data/{dataset}.csv', f'./sounds_{dataset}', label_map, target_length=target_length)
+    test_dataset = AudioDataset(f'./data/{dataset}.csv', f'./sounds_{dataset}', target_length=target_length)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     model = AudioClassifier(num_classes=len(label_map))

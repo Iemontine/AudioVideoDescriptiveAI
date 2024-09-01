@@ -32,12 +32,10 @@ joblib.dump(label_encoder, "label_encoder.pkl")
 
 # map labels to one-hot encoded vectors
 label_map = dict(zip(ids, encoded_labels))
-
 # 2. Dataset Loader
 class AudioDataset(Dataset):
-    def __init__(self, csv_file, audio_dir, label_map, target_length):
+    def __init__(self, csv_file, audio_dir, target_length):
         self.audio_dir = audio_dir
-        self.label_map = label_map
         self.target_length = target_length
 
         # parse the CSV file
@@ -49,27 +47,15 @@ class AudioDataset(Dataset):
                 ytid = parts[0]
                 start_sec = float(parts[1])
                 end_sec = float(parts[2])
-                labels = [i.replace("\"", "") for i in parts[3].split(',')]
+                labels = [parts[3].split(',')[0].replace("\"", "")]  # Only consider the first label
+                labels = [label for label in labels if label in label_map.keys()]
                 self.data.append((ytid, start_sec, end_sec, labels))
 
         print(f"Loaded {len(self.data)} samples from dataset")
         self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if os.path.exists(os.path.join(self.audio_dir, f"{ytid}.flac"))]
         print(f"Filtered to {len(self.data)} samples with audio files")
 
-        # TODO: this isn't working, investigate why
-        # # remove labels with less than 100 examples or more than 500 examples
-        # # Count the number of examples for each label
-        # label_count = {}
-        # for _, _, _, labels in self.data:
-        #     for label in labels:
-        #         if label in label_count:
-        #             label_count[label] += 1
-        #         else:
-        #             label_count[label] = 1
-        # filtered_labels = [label for label, count in label_count.items() if 100 <= count <= 500]
-        # self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if any(label in filtered_labels for label in labels)]
-        # print(f"Filtered to {len(self.data)} samples with valid label counts")
-
+        # Count the occurrences of each label
         label_count = {}
         for _, _, _, labels in self.data:
             for label in labels:
@@ -77,11 +63,32 @@ class AudioDataset(Dataset):
                     label_count[label] += 1
                 else:
                     label_count[label] = 1
+        # Output each label's true unencoded name and count, sorted ascending
+        sorted_label_count = sorted(label_count.items(), key=lambda item: item[1])
+        for label, count in sorted_label_count:
+            print(f"Label: {label_encoder.inverse_transform([label_map[label]])[0]}, Count: {count}")
 
-        # one-hot-encoded labels
-        self.mlb = MultiLabelBinarizer(classes=list(self.label_map.keys()))
+        # Remove labels with less than 100 examples or more than 500 examples
+        filtered_labels = [label for label, count in label_count.items() if 100 <= count <= 500]
+        self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if any(label in filtered_labels for label in labels)]
+        print(f"Filtered to {len(self.data)} samples with valid label counts")
+
+        # Count the occurrences of each label
+        label_count = {}
+        for _, _, _, labels in self.data:
+            for label in labels:
+                if label in label_count:
+                    label_count[label] += 1
+                else:
+                    label_count[label] = 1
+        # Output each label's true unencoded name and count, sorted ascending
+        sorted_label_count = sorted(label_count.items(), key=lambda item: item[1])
+        for label, count in sorted_label_count:
+            print(f"Label: {label_encoder.inverse_transform([label_map[label]])[0]}, Count: {count}")
+
+        # One-hot-encoded labels
+        self.mlb = MultiLabelBinarizer(classes=list(label_map.keys()))
         self.mlb.fit(self.data_labels())
-        print()
 
     def data_labels(self):
         return [labels for _, _, _, labels in self.data]
@@ -219,19 +226,20 @@ def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs):
         epoch_loss = running_loss / len(dataloader.dataset)
         torch.save(model.state_dict(), f'./models/model_checkpoint_e{epoch}.pth')
     torch.save(model.state_dict(), './models/model.pth')
+    plt.savefig('batch_loss_plot.png')
 
 if __name__ == "__main__":
     source = 'balanced_train_segments'
-    dataset = AudioDataset(f'./data/{source}.csv', f'./sounds_{source}', label_map, target_length=600)
+    dataset = AudioDataset(f'./data/{source}.csv', f'./sounds_{source}', target_length=600)
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
 
     model = AudioClassifier(num_classes=len(label_map))
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.00001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     model = model.to(device)
 
-    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=10)
+    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=100)
