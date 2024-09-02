@@ -5,97 +5,93 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torchvision.models import resnet18, ResNet18_Weights
 from torchaudio.transforms import MelSpectrogram, AmplitudeToDB
 from sklearn.preprocessing import MultiLabelBinarizer, LabelEncoder
-import joblib
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-# 1. Load data
-with open('ontology.json') as f:
-    ontology_data = json.load(f)
+# load ontology
+with open('ontology.json') as f: ontology = json.load(f)
 
 # extract all unique IDs
 ids = []
-for item in ontology_data:
+for item in ontology:
     ids.append(item['id'])
-    # ids.extend(item['child_ids'])   # TODO: investigate removal of child_ids
-
-# remove duplicates
-ids = list(set(ids))
 
 # save encoder, used to decode labels later
 label_encoder = LabelEncoder()
 encoded_labels = label_encoder.fit_transform(ids)
-joblib.dump(label_encoder, "label_encoder.pkl")
 
-# map labels to one-hot encoded vectors
-label_map = dict(zip(ids, encoded_labels))
+# 9/2/2024: code now correctly relates the encoded label to the ontology ID, meaning ytid->label->encoded_label is now correct (probably)
+id_to_encoded_label = {}
+id_to_name = {}
+for item in ontology:
+    id_to_encoded_label[item['id']] = label_encoder.transform([item['id']])[0]
+    id_to_name[item['id']] = item['name']
+
 # 2. Dataset Loader
 class AudioDataset(Dataset):
     def __init__(self, csv_file, audio_dir, target_length):
         self.audio_dir = audio_dir
         self.target_length = target_length
+        self.data = []
 
-        # parse the CSV file
+        self.parse_dataset(csv_file)
+
+        # Remove samples without an existing audio file
+        print(f"Loaded {len(self.data)} samples from dataset")
+        self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if os.path.exists(os.path.join(self.audio_dir, f"{ytid}.flac"))]
+        print(f"Filtered to {len(self.data)} samples with audio files")
+
+        # Remove labels with less than 100 examples or more than 500 examples
+        label_count = self.count_labels(silent=True)
+        filtered_labels = [label for label, count in label_count.items() if 100 <= count <= 150]
+        self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if any(label in filtered_labels for label in labels)]
+        print(f"Filtered to {len(self.data)} samples with valid label counts")
+
+        self.count_labels()
+
+        # One-hot-encoded labels
+        self.mlb = MultiLabelBinarizer(classes=list(id_to_encoded_label.keys()))
+        self.mlb.fit(self.data_labels())
+
+    def count_labels(self, silent=False):
+        # Counts the occurrences of each label type
+        label_count = {}
+        for _, _, _, labels in self.data:
+            for label in labels:
+                if label not in label_count:    # register the label if it's not in the dictionary
+                    label_count[label] = 1
+                else:                           # increment the count if it's already in the dictionary
+                    label_count[label] += 1
+
+        # Output each label's true unencoded name and its count, sorted ascending by count
+        if not silent:
+            sorted_label_count = sorted(label_count.items(), key=lambda item: item[1])
+            for label, count in sorted_label_count:
+                label_id = label_encoder.inverse_transform([id_to_encoded_label[label]])[0]
+                label_name = next(item["name"] for item in ontology if item["id"] == label_id)
+                print(f"Label: {label_name}, Count: {count}")
+        return label_count
+    def parse_dataset(self, csv_file):
         with open(csv_file, 'r') as f:
             lines = f.readlines()[3:]  # skip header lines
-            self.data = []
             for line in lines:
                 parts = line.strip().split(', ')
                 ytid = parts[0]
                 start_sec = float(parts[1])
                 end_sec = float(parts[2])
-                labels = [parts[3].split(',')[0].replace("\"", "")]  # Only consider the first label
-                labels = [label for label in labels if label in label_map.keys()]
+
+                # an entry can have multiple labels, separated by commas
+                # currently only considers the first label with [0], TODO: investigate removal of [0]
+                labels = [parts[3].split(',')[0].replace("\"", "")]
+
                 self.data.append((ytid, start_sec, end_sec, labels))
-
-        print(f"Loaded {len(self.data)} samples from dataset")
-        self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if os.path.exists(os.path.join(self.audio_dir, f"{ytid}.flac"))]
-        print(f"Filtered to {len(self.data)} samples with audio files")
-
-        # Count the occurrences of each label
-        label_count = {}
-        for _, _, _, labels in self.data:
-            for label in labels:
-                if label in label_count:
-                    label_count[label] += 1
-                else:
-                    label_count[label] = 1
-        # Output each label's true unencoded name and count, sorted ascending
-        sorted_label_count = sorted(label_count.items(), key=lambda item: item[1])
-        for label, count in sorted_label_count:
-            print(f"Label: {label_encoder.inverse_transform([label_map[label]])[0]}, Count: {count}")
-
-        # Remove labels with less than 100 examples or more than 500 examples
-        filtered_labels = [label for label, count in label_count.items() if 100 <= count <= 500]
-        self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if any(label in filtered_labels for label in labels)]
-        print(f"Filtered to {len(self.data)} samples with valid label counts")
-
-        # Count the occurrences of each label
-        label_count = {}
-        for _, _, _, labels in self.data:
-            for label in labels:
-                if label in label_count:
-                    label_count[label] += 1
-                else:
-                    label_count[label] = 1
-        # Output each label's true unencoded name and count, sorted ascending
-        sorted_label_count = sorted(label_count.items(), key=lambda item: item[1])
-        for label, count in sorted_label_count:
-            print(f"Label: {label_encoder.inverse_transform([label_map[label]])[0]}, Count: {count}")
-
-        # One-hot-encoded labels
-        self.mlb = MultiLabelBinarizer(classes=list(label_map.keys()))
-        self.mlb.fit(self.data_labels())
-
     def data_labels(self):
         return [labels for _, _, _, labels in self.data]
-
     def __len__(self):
         return len(self.data)
-    
+
     # preprocesses the audio data, returns mel spectrogram and one-hot encoded labels
     def __getitem__(self, idx):
         ytid, start_sec, end_sec, labels = self.data[idx]
@@ -110,7 +106,12 @@ class AudioDataset(Dataset):
 
         # TODO: investigate feature masking to improve quality of data?
 
-        # # Plot the waveform
+        # discovered several waveforms with only one channel, this fixes that
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+
+        # print(f"Shape of waveform: {waveform.shape}")
+        # Plot the waveform
         # plt.figure(figsize=(10, 5))
         # plt.plot(waveform[0].numpy())
         # plt.title(f'Waveform of File: {ytid} of length {end_sec - start_sec} seconds')
@@ -123,7 +124,7 @@ class AudioDataset(Dataset):
 
         # add the channel dimension if not present (needed for CNN)
         if mel_spectrogram.dim() == 2:
-            mel_spectrogram = mel_spectrogram.unsqueeze(0)  
+            mel_spectrogram = mel_spectrogram.unsqueeze(0)
 
         # resize the mel spectrogram to the target length
         if mel_spectrogram.shape[2] < self.target_length:   # pad if too short
@@ -136,13 +137,13 @@ class AudioDataset(Dataset):
         # print(labels)
         # print(f"hmm: {mel_spectrogram[0]}")
 
-        # # Graph the mel spectrogram
+        # Graph the mel spectrogram
         # mel_spectrogram_np = mel_spectrogram[0].detach().numpy()
         # plt.figure(figsize=(10, 5))
         # plt.imshow(mel_spectrogram_np, aspect='auto', origin='lower',
         #         extent=[0, mel_spectrogram_np.shape[1], 0, mel_spectrogram_np.shape[0]])
         # plt.colorbar(format='%+2.0f dB')
-        # plt.title(f'Mel Spectrogram of File: {ytid} of length {end_sec - start_sec} seconds')
+        # plt.title(f'Mel Spectrogram of File: {ytid} ({id_to_name[labels[0]]}) of length {end_sec - start_sec} seconds')
         # plt.xlabel('Time (frames)')
         # plt.ylabel('Mel Frequency (bins)')
         # plt.show()
@@ -169,7 +170,6 @@ class AudioClassifier(nn.Module):
         self.fc2 = nn.Linear(512, num_classes)
 
     def forward(self, x):
-        # TODO: reevaluate architecture
         x = self.pool(nn.ReLU()(self.bn1(self.conv1(x))))
         x = self.pool(nn.ReLU()(self.bn2(self.conv2(x))))
         x = self.pool(nn.ReLU()(self.bn3(self.conv3(x))))
@@ -177,9 +177,35 @@ class AudioClassifier(nn.Module):
         x = nn.ReLU()(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
-        
+
         return x  # returns logits
 
+# # Hook function to capture feature maps
+# feature_maps = {}
+
+# def get_feature_map(name):
+#     def hook(model, input, output):
+#         feature_maps[name] = output.detach()
+#     return hook
+
+# # Register hooks for each convolutional layer
+# def register_hooks(model):
+#     model.conv1.register_forward_hook(get_feature_map('conv1'))
+#     model.conv2.register_forward_hook(get_feature_map('conv2'))
+#     model.conv3.register_forward_hook(get_feature_map('conv3'))
+
+# # Visualize feature maps
+# def plot_feature_maps(feature_maps):
+#     for layer_name, feature_map in feature_maps.items():
+#         num_channels = min(8, feature_map.shape[1])  # Visualize at most 8 channels
+#         fig, axs = plt.subplots(1, num_channels, figsize=(20, 10))
+#         fig.suptitle(f'Feature maps from {layer_name}')
+#         for i in range(num_channels):
+#             ax = axs[i]
+#             ax.imshow(feature_map[0, i].cpu().numpy(), aspect='auto', origin='lower')
+#             ax.set_title(f'Channel {i+1}')
+#             ax.axis('off')
+#         plt.show()
 
 batch_losses = []
 def init_plot():
@@ -188,7 +214,7 @@ def init_plot():
     plt.title("Batch Loss Over Time")
     plt.xlabel("Iterations")
     plt.ylabel("Batch Loss")
-    plt.ylim(0, 1)
+    plt.ylim(0, 2)
     plt.grid()
 def update_plot(loss):
     batch_losses.append(loss)
@@ -197,7 +223,7 @@ def update_plot(loss):
     plt.title("Batch Loss Over Time")
     plt.xlabel("Batch")
     plt.ylabel("Batch Loss")
-    plt.ylim(0, 1)
+    plt.ylim(0, 2)
     plt.grid()
     plt.legend()
     plt.pause(0.01)
@@ -205,12 +231,15 @@ def update_plot(loss):
 # 4. Training Loop
 def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs):
     init_plot()  # Initialize the plot
+    # register_hooks(model)  # Register hooks to capture feature maps
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{num_epochs}", leave=True)
         for inputs, labels in progress_bar:
-            inputs, labels = inputs.to(device), labels.to(device)   # move tensors to GPU 
+            # move tensors to GPU
+            inputs, labels = inputs.to(device), labels.to(device)
+
             optimizer.zero_grad()                                   # zero the parameter gradients
             outputs = model(inputs)                                 # forward pass
             loss = criterion(outputs, labels)                       # compute the loss
@@ -225,21 +254,23 @@ def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs):
         scheduler.step()
         epoch_loss = running_loss / len(dataloader.dataset)
         torch.save(model.state_dict(), f'./models/model_checkpoint_e{epoch}.pth')
+
+        # plot_feature_maps(feature_maps)  # Visualize feature maps
     torch.save(model.state_dict(), './models/model.pth')
     plt.savefig('batch_loss_plot.png')
 
 if __name__ == "__main__":
     source = 'balanced_train_segments'
     dataset = AudioDataset(f'./data/{source}.csv', f'./sounds_{source}', target_length=600)
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-    model = AudioClassifier(num_classes=len(label_map))
+    model = AudioClassifier(num_classes=len(id_to_encoded_label))
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.00001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     model = model.to(device)
 
-    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=100)
+    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=50)
