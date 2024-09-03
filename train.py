@@ -208,27 +208,33 @@ class AudioClassifier(nn.Module):
 #         plt.show()
 
 # ====================== Training ======================
-batch_losses = []
-def init_plot():
+losses = []
+def init_plot(track='epoch'):
     plt.ion()
-    plt.title("Batch Loss Over Time")
-    plt.xlabel("Iterations")
-    plt.ylabel("Batch Loss")
-    plt.ylim(0, 1)
-    plt.grid()
-def update_plot(loss):
-    batch_losses.append(loss)
+    plt.figure()
+    plt.show()
+    
+def update_plot(loss, track='epoch'):
+    losses.append(loss)
     plt.clf()
-    plt.plot(batch_losses, label='Epoch Loss', color='blue')
-    plt.title("Batch Loss Over Time")
-    plt.xlabel("Batch")
-    plt.ylabel("Batch Loss")
     plt.ylim(0, 1)
     plt.grid()
+    if track == 'epoch':
+        plt.title("Epoch Loss Over Time")
+        plt.xlabel("Epochs")
+        plt.ylabel("Epoch Loss")
+        plt.plot(losses, label='Epoch Loss', color='blue')
+    elif track == 'batch':
+        plt.title("Batch Loss Over Time")
+        plt.xlabel("Iterations")
+        plt.ylabel("Batch Loss")
+        plt.plot(losses, label='Batch Loss', color='blue')
     plt.legend()
-    plt.pause(0.01)
-def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs):
-    init_plot()  # Initialize the plot
+    plt.pause(0.2)
+
+
+def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs, track='batch'):
+    init_plot(track=track)  # Initialize the plot
     # register_hooks(model)  # Register hooks to capture feature maps
     for epoch in range(num_epochs):
         model.train()
@@ -248,13 +254,13 @@ def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs):
             batch_loss = loss.item()
             running_loss += loss.item() * inputs.size(0)
             progress_bar.set_postfix(loss=batch_loss)
-            update_plot(batch_loss)
+            if track == 'batch':
+                update_plot(batch_loss, track=track)
         scheduler.step()
-        epoch_loss = running_loss / len(dataloader.dataset)
+        if track == 'epoch':
+            update_plot(batch_loss, track=track)
         torch.save(model.state_dict(), f'./models/model_checkpoint_e{epoch}.pth')
-
         # plot_feature_maps(feature_maps)  # Visualize feature maps
-    torch.save(model.state_dict(), './models/model.pth')
     plt.savefig('batch_loss_plot.png')
 
 # ====================== Main ======================
@@ -272,4 +278,4 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
     model = model.to(device)
 
-    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=50)
+    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=10, track='batch')
