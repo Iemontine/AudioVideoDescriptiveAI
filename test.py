@@ -17,7 +17,7 @@ def evaluate_model(model, dataloader, device):
             outputs = model(inputs)
 
             avg_preds = torch.mean(outputs, dim=1)
-            print(avg_preds)
+
             # sigmoid to get probabilities and then threshold to get binary predictions
             preds = torch.sigmoid(outputs) >= 0.01
             preds = preds.cpu().numpy()
@@ -29,6 +29,8 @@ def evaluate_model(model, dataloader, device):
                 label_integer = np.argmax(label)
                 pred_integers.append(pred_integer)
                 label_integers.append(label_integer)
+                # uncomment this to view what the model predicted and the actual label
+                # THIS IS DEFINITELY WRONG BECAUSE IT IS PREDICTING LABELS NOT EVEN IN THE REDUCED DATASET 
                 # print(id_to_name[label_encoder.inverse_transform([pred_integer])[0]], id_to_name[label_encoder.inverse_transform([label_integer])[0]])
 
             all_preds.append(preds)
@@ -43,9 +45,9 @@ def evaluate_model(model, dataloader, device):
     return overall_accuracy, overall_f1, pred_integers, label_integers
 
 if __name__ == "__main__":
-    batch_size = 8
+    batch_size = 32
     target_length = 600
-    model_path = './models/model_checkpoint_e25.pth'
+    model_path = './models/model_checkpoint_e20.pth'
 
     dataset = 'balanced_train_segments'
     test_dataset = AudioDataset(f'./data/{dataset}.csv', f'./sounds_{dataset}', target_length=target_length)
