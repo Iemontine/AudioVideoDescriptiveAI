@@ -43,11 +43,11 @@ class AudioDataset(Dataset):
         self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if os.path.exists(os.path.join(self.audio_dir, f"{ytid}.flac"))]
         print(f"Filtered to {len(self.data)} samples with audio files")
 
-        # Remove labels with less than 100 examples or more than 500 examples
+        # Remove labels with less than 100 examples or more than 150 examples
         label_count = self.count_labels(silent=True)
         filtered_labels = [label for label, count in label_count.items() if 100 <= count <= 150]
         self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if any(label in filtered_labels for label in labels)]
-        print(f"Filtered to {len(self.data)} samples with valid label counts")
+        print(f"Filtered to {len(self.data)} samples with more than 100 and less than 150 examples per label")
 
         self.count_labels()
 
@@ -210,11 +210,10 @@ class AudioClassifier(nn.Module):
 batch_losses = []
 def init_plot():
     plt.ion()
-    plt.figure(figsize=(10, 5))
     plt.title("Batch Loss Over Time")
     plt.xlabel("Iterations")
     plt.ylabel("Batch Loss")
-    plt.ylim(0, 2)
+    plt.ylim(0, 1)
     plt.grid()
 def update_plot(loss):
     batch_losses.append(loss)
@@ -223,7 +222,7 @@ def update_plot(loss):
     plt.title("Batch Loss Over Time")
     plt.xlabel("Batch")
     plt.ylabel("Batch Loss")
-    plt.ylim(0, 2)
+    plt.ylim(0, 1)
     plt.grid()
     plt.legend()
     plt.pause(0.01)
@@ -266,7 +265,7 @@ if __name__ == "__main__":
 
     model = AudioClassifier(num_classes=len(id_to_encoded_label))
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
