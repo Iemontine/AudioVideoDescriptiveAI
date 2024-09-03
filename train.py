@@ -257,6 +257,7 @@ def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs):
     torch.save(model.state_dict(), './models/model.pth')
     plt.savefig('batch_loss_plot.png')
 
+# ====================== Main ======================
 if __name__ == "__main__":
     source = 'balanced_train_segments'
     dataset = AudioDataset(f'./data/{source}.csv', f'./sounds_{source}', target_length=600)
