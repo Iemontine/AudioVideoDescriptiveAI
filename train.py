@@ -1,5 +1,7 @@
 import os
 import json
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 import torchaudio
 import torch
 import torch.nn as nn
@@ -7,8 +9,6 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchaudio.transforms import MelSpectrogram, AmplitudeToDB
 from sklearn.preprocessing import MultiLabelBinarizer, LabelEncoder
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 # load ontology
 with open('ontology.json') as f: ontology = json.load(f)
@@ -29,7 +29,7 @@ for item in ontology:
     id_to_encoded_label[item['id']] = label_encoder.transform([item['id']])[0]
     id_to_name[item['id']] = item['name']
 
-# 2. Dataset Loader
+# ====================== Dataset Loader ======================
 class AudioDataset(Dataset):
     def __init__(self, csv_file, audio_dir, target_length):
         self.audio_dir = audio_dir
@@ -154,7 +154,7 @@ class AudioDataset(Dataset):
 
         return mel_spectrogram, labels
 
-# 3. Model Architecture
+# ====================== Model Architecture ======================
 class AudioClassifier(nn.Module):
     def __init__(self, num_classes):
         super(AudioClassifier, self).__init__()
@@ -207,6 +207,7 @@ class AudioClassifier(nn.Module):
 #             ax.axis('off')
 #         plt.show()
 
+# ====================== Training ======================
 batch_losses = []
 def init_plot():
     plt.ion()
@@ -226,8 +227,6 @@ def update_plot(loss):
     plt.grid()
     plt.legend()
     plt.pause(0.01)
-
-# 4. Training Loop
 def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs):
     init_plot()  # Initialize the plot
     # register_hooks(model)  # Register hooks to capture feature maps
