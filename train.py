@@ -22,7 +22,7 @@ for item in ontology:
 label_encoder = LabelEncoder()
 encoded_labels = label_encoder.fit_transform(ids)
 
-# 9/2/2024: code now correctly relates the encoded label to the ontology ID, meaning ytid->label->encoded_label is now correct (probably)
+# 9/2/2024: reworked mapping encoded label to the ontology ID, meaning ytid<->label<->encoded_label (probably) works
 id_to_encoded_label = {}
 id_to_name = {}
 for item in ontology:
@@ -43,8 +43,9 @@ class AudioDataset(Dataset):
         self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if os.path.exists(os.path.join(self.audio_dir, f"{ytid}.flac"))]
         print(f"Filtered to {len(self.data)} samples with audio files")
 
-        # Remove labels with less than 100 examples or more than 150 examples
         label_count = self.count_labels(silent=True)
+        
+        # Remove labels with less than 100 examples or more than 150 examples
         filtered_labels = [label for label, count in label_count.items() if 100 <= count <= 150]
         self.data = [(ytid, start_sec, end_sec, labels) for ytid, start_sec, end_sec, labels in self.data if any(label in filtered_labels for label in labels)]
         print(f"Filtered to {len(self.data)} samples with more than 100 and less than 150 examples per label")
@@ -104,20 +105,20 @@ class AudioDataset(Dataset):
             AmplitudeToDB()
         )
 
-        # TODO: investigate feature masking to improve quality of data?
+        # TODO: investigate feature masking to improve quality of data? augment data?
 
         # discovered several waveforms with only one channel, this fixes that
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
 
-        # print(f"Shape of waveform: {waveform.shape}")
         # Plot the waveform
-        # plt.figure(figsize=(10, 5))
-        # plt.plot(waveform[0].numpy())
-        # plt.title(f'Waveform of File: {ytid} of length {end_sec - start_sec} seconds')
-        # plt.xlabel('Time (samples)')
-        # plt.ylabel('Amplitude')
-        # plt.show()
+        print(f"Shape of waveform: {waveform.shape}")
+        plt.figure(figsize=(10, 5))
+        plt.plot(waveform[0].numpy())
+        plt.title(f'Waveform of File: {ytid} of length {end_sec - start_sec} seconds')
+        plt.xlabel('Time (samples)')
+        plt.ylabel('Amplitude')
+        plt.show()
 
         # convert waveform to mel spectrogram
         mel_spectrogram = transform(waveform)
@@ -133,20 +134,17 @@ class AudioDataset(Dataset):
         elif mel_spectrogram.shape[2] > self.target_length: # truncate if too long
             mel_spectrogram = mel_spectrogram[:, :, :self.target_length]
 
-        # print(f"Shape of mel_spectrogram: {mel_spectrogram.shape}")
-        # print(labels)
-        # print(f"hmm: {mel_spectrogram[0]}")
-
         # Graph the mel spectrogram
-        # mel_spectrogram_np = mel_spectrogram[0].detach().numpy()
-        # plt.figure(figsize=(10, 5))
-        # plt.imshow(mel_spectrogram_np, aspect='auto', origin='lower',
-        #         extent=[0, mel_spectrogram_np.shape[1], 0, mel_spectrogram_np.shape[0]])
-        # plt.colorbar(format='%+2.0f dB')
-        # plt.title(f'Mel Spectrogram of File: {ytid} ({id_to_name[labels[0]]}) of length {end_sec - start_sec} seconds')
-        # plt.xlabel('Time (frames)')
-        # plt.ylabel('Mel Frequency (bins)')
-        # plt.show()
+        print(f"Shape of mel_spectrogram: {mel_spectrogram.shape}")
+        mel_spectrogram_np = mel_spectrogram[0].detach().numpy()
+        plt.figure(figsize=(10, 5))
+        plt.imshow(mel_spectrogram_np, aspect='auto', origin='lower',
+                extent=[0, mel_spectrogram_np.shape[1], 0, mel_spectrogram_np.shape[0]])
+        plt.colorbar(format='%+2.0f dB')
+        plt.title(f'Mel Spectrogram of File: {ytid} ({id_to_name[labels[0]]}) of length {end_sec - start_sec} seconds')
+        plt.xlabel('Time (frames)')
+        plt.ylabel('Mel Frequency (bins)')
+        plt.show()
 
         # convert labels to float tensor
         labels = self.mlb.transform([labels])[0]  # Get the binary labels
@@ -170,46 +168,24 @@ class AudioClassifier(nn.Module):
         self.fc2 = nn.Linear(512, num_classes)
 
     def forward(self, x):
+        # generate feature map
         x = self.pool(nn.ReLU()(self.bn1(self.conv1(x))))
         x = self.pool(nn.ReLU()(self.bn2(self.conv2(x))))
         x = self.pool(nn.ReLU()(self.bn3(self.conv3(x))))
-        x = x.view(x.size(0), -1)  # flatten
+        
+        # TODO: check feature map or output
+        
+        # flatten, then apply linear classifier, TODO: investigate separating this?
+        x = x.view(x.size(0), -1)
         x = nn.ReLU()(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
 
         return x  # returns logits
 
-# # Hook function to capture feature maps
-# feature_maps = {}
-
-# def get_feature_map(name):
-#     def hook(model, input, output):
-#         feature_maps[name] = output.detach()
-#     return hook
-
-# # Register hooks for each convolutional layer
-# def register_hooks(model):
-#     model.conv1.register_forward_hook(get_feature_map('conv1'))
-#     model.conv2.register_forward_hook(get_feature_map('conv2'))
-#     model.conv3.register_forward_hook(get_feature_map('conv3'))
-
-# # Visualize feature maps
-# def plot_feature_maps(feature_maps):
-#     for layer_name, feature_map in feature_maps.items():
-#         num_channels = min(8, feature_map.shape[1])  # Visualize at most 8 channels
-#         fig, axs = plt.subplots(1, num_channels, figsize=(20, 10))
-#         fig.suptitle(f'Feature maps from {layer_name}')
-#         for i in range(num_channels):
-#             ax = axs[i]
-#             ax.imshow(feature_map[0, i].cpu().numpy(), aspect='auto', origin='lower')
-#             ax.set_title(f'Channel {i+1}')
-#             ax.axis('off')
-#         plt.show()
-
 # ====================== Training ======================
 losses = []
-def init_plot(track='epoch'):
+def init_plot():
     plt.ion()
     plt.figure()
     plt.show()
@@ -234,8 +210,9 @@ def update_plot(loss, track='epoch'):
 
 
 def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs, track='batch'):
-    init_plot(track=track)  # Initialize the plot
-    # register_hooks(model)  # Register hooks to capture feature maps
+    if track == 'batch' or track == 'epoch':
+        init_plot()
+    
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
@@ -260,7 +237,6 @@ def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs, 
         if track == 'epoch':
             update_plot(batch_loss, track=track)
         torch.save(model.state_dict(), f'./models/model_checkpoint_e{epoch}.pth')
-        # plot_feature_maps(feature_maps)  # Visualize feature maps
     plt.savefig('batch_loss_plot.png')
 
 # ====================== Main ======================
@@ -278,4 +254,4 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
     model = model.to(device)
 
-    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=10, track='batch')
+    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=10, track='none')
