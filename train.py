@@ -180,21 +180,22 @@ class AudioClassifier(nn.Module):   # CNN model, inheriting from pytorch neural 
         self.bn1 = nn.BatchNorm2d(64)
         self.bn2 = nn.BatchNorm2d(128)
         self.bn3 = nn.BatchNorm2d(256)
-        self.pool = nn.MaxPool2d(kernel_size=(2, 2))
-        self.dropout = nn.Dropout(p=0.5)
+        self.pool = nn.AvgPool2d(kernel_size=(2, 2))    # used to be maxpool
+        self.dropout = nn.Dropout(p=0.2)        # used to be 0.5
+        self.activation = nn.ReLU()
         self.fc1 = nn.Linear(256 * 16 * 75, 512)
         self.fc2 = nn.Linear(512, num_classes)      # output layer, note the output is num_classes logits, 
                                                     # where each index corresponding to a class
 
     def forward(self, x):
         # generate feature map
-        x = self.pool(nn.ReLU()(self.bn1(self.conv1(x))))
-        x = self.pool(nn.ReLU()(self.bn2(self.conv2(x))))
-        x = self.pool(nn.ReLU()(self.bn3(self.conv3(x))))
+        x = self.pool(self.activation(self.bn1(self.conv1(x))))
+        x = self.pool(self.activation(self.bn2(self.conv2(x))))
+        x = self.pool(self.activation(self.bn3(self.conv3(x))))
         
         # flatten, then apply linear classifier
         x = x.view(x.size(0), -1)
-        x = nn.ReLU()(self.fc1(x))
+        x = self.activation(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
 
@@ -248,7 +249,7 @@ def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs, 
             running_loss += loss.item() * spectrogram.size(0)
             progress_bar.set_postfix(loss=batch_loss)
             if track == 'batch': update_plot(batch_loss, track=track)
-        scheduler.step()
+        scheduler.step(loss)
         if track == 'epoch': update_plot(batch_loss, track=track)
         torch.save(model.state_dict(), f'./models/model_checkpoint_e{epoch}.pth')
     plt.savefig('batch_loss_plot.png')
@@ -262,11 +263,11 @@ if __name__ == "__main__":
     model = AudioClassifier(num_classes=len(id_to_name))
     criterion = nn.BCEWithLogitsLoss()
     # optimizer = optim.SGD(model.parameters(), lr=0.01)        # stochastic gradient descent results in worse convergence
-    optimizer = optim.Adam(model.parameters(), lr=0.00001)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    optimizer = optim.Adam(model.parameters(), lr=0.00005)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5) # used to be StepLR
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     model = model.to(device)
 
-    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=20, track='batch')
+    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=10, track='batch')

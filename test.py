@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 from train import AudioDataset, AudioClassifier, one_hot_encoder
 
@@ -8,13 +9,14 @@ id_to_name = {}
 
 import torch
 
-def evaluate_model(model, dataloader, device, quiet=False):
+def evaluate_model(model, epoch, dataloader, device, quiet=False):
     model.eval()
     all_preds = []
     all_labels = []
 
     with torch.no_grad():
-        for idx, (inputs, labels) in enumerate(dataloader):
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}", leave=True)
+        for idx, (inputs, labels) in enumerate(progress_bar):
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
 
@@ -73,7 +75,7 @@ if __name__ == "__main__":
     if not multi:
         model = model.to(device)
 
-        model_path = './models/model_checkpoint_e9.pth'
+        model_path = './models/model_checkpoint_e6.pth'
         model.load_state_dict(torch.load(model_path))
 
         accuracy, f1 = evaluate_model(model, test_dataloader, device, quiet=quiet)
@@ -84,14 +86,12 @@ if __name__ == "__main__":
         f1_scores = []
         epochs = range(0, 20)
 
-        for i in epochs:
-            print(f"=== Model {i} ===")
-
+        for epoch in epochs:
             model = model.to(device)
             model_path = f'./models/model_checkpoint_e{i}.pth'
             model.load_state_dict(torch.load(model_path))
 
-            accuracy, f1 = evaluate_model(model, test_dataloader, device, quiet=quiet)
+            accuracy, f1 = evaluate_model(model, epoch, test_dataloader, device, quiet=quiet)
             accuracy_scores.append(accuracy)
             f1_scores.append(f1)
 
