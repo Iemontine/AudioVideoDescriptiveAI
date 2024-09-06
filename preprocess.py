@@ -4,7 +4,6 @@ from moviepy.editor import VideoFileClip, ImageSequenceClip
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from train import AudioDataset, AudioClassifier, one_hot_encoder
@@ -143,7 +142,7 @@ input_video_path = "input.mp4"
 
 dataset = 'eval_segments'
 test_dataset = AudioDataset(f'./data/{dataset}.csv', f'./sounds_{dataset}', target_length=600)
-_, id_to_name = test_dataset.load_data()
+id_to_name = test_dataset.id_to_name
 
 VideoFileClip("30_second_animation_assignment.mp4").write_videofile(input_video_path, codec='libx264', logger=None)
 output_dir = "output"

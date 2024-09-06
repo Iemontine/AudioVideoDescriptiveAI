@@ -8,8 +8,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torchaudio.transforms import MelSpectrogram, AmplitudeToDB
+from torchaudio.transforms import MelSpectrogram, AmplitudeToDB, TimeMasking, FrequencyMasking
+from torch.cuda.amp import GradScaler, autocast
 from sklearn.preprocessing import OneHotEncoder
+from torchvision.models import resnet18, ResNet18_Weights
 
 # load ontology
 with open('ontology.json') as f: ontology = json.load(f)
@@ -28,11 +30,13 @@ id_to_name = {}
 
 # ====================== Dataset Loader ======================
 class AudioDataset(Dataset):
-    def __init__(self, csv_file, audio_dir, quiet=True, reduced=False, target_length=600):
+    def __init__(self, csv_file, audio_dir, quiet=True, display=False, reduced=False, target_length=600):
         self.audio_dir = audio_dir
         self.target_length = target_length
         self.quiet = quiet
+        self.display = display
         self.data = []
+        self.id_to_name = None
         self.parse_dataset(csv_file)
         self.load_data(reduced)
 
@@ -41,26 +45,22 @@ class AudioDataset(Dataset):
         # Remove samples without an existing audio file
         print(f"Loaded {len(self.data)} samples from dataset")
         self.data = [(ytid, start_sec, end_sec, ids) for ytid, start_sec, end_sec, ids in self.data if os.path.exists(os.path.join(self.audio_dir, f"{ytid}.flac"))]
-        print(f"Filtered to {len(self.data)} samples with audio files")
+        print(f"Filtered to {len(self.data)} samples with existing audio files")
 
         id_count = self.count_ids(quiet=self.quiet)
         
         global id_to_one_hot, id_to_name
-        if reduced:
-            # Remove labels with less than 100 examples or more than 150 examples
-            filtered_ids = [id for id, count in id_count.items() if 100 <= count <= 150]
-            self.data = [(ytid, start_sec, end_sec, ids) for ytid, start_sec, end_sec, ids in self.data if any(id in filtered_ids for id in ids)]
-            print(f"Filtered to {len(self.data)} samples with more than 100 and less than 150 examples per label")
-            self.count_ids()
-            one_hot_encoder.fit([[id] for id in filtered_ids])
-            id_to_one_hot = {id: one_hot_encoder.transform([[id]]).flatten() for id in filtered_ids}
-            id_to_name = {item['id']: item['name'] for item in ontology if item['id'] in filtered_ids}
-            return id_to_one_hot, id_to_name
-        else:
-            one_hot_encoder.fit([[id] for id in ids])
-            id_to_one_hot = {id: one_hot_encoder.transform([[id]]).flatten() for id in ids}
-            id_to_name = {item['id']: item['name'] for item in ontology}
-            return id_to_one_hot, id_to_name
+
+        filtered_ids = list(set(id for sample in self.data for id in sample[3]))
+        self.data = [(ytid, start_sec, end_sec, ids) for ytid, start_sec, end_sec, ids in self.data if any(id in filtered_ids for id in ids)]
+
+        filtered_ids = list(set(id for sample in self.data for id in sample[3]))
+        one_hot_encoder.fit([[id] for id in filtered_ids])
+        id_to_one_hot = {id: one_hot_encoder.transform([[id]]).flatten() for id in filtered_ids}
+        id_to_name = {item['id']: item['name'] for item in ontology if item['id'] in filtered_ids}
+        self.id_to_name = id_to_name
+
+        return id_to_one_hot, id_to_name
         
     # preprocesses and returns a datapoint: mel spectrogram and its corresponding true label
     def __getitem__(self, idx):
@@ -78,17 +78,19 @@ class AudioDataset(Dataset):
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
 
+        # display the waveform
+        if self.display:
+            self.display_waveform(waveform, ytid, start_sec, end_sec)
+
         # define transform used to convert waveform to mel spectrogram with decibel scaling
         transform = nn.Sequential(
             MelSpectrogram(sample_rate=16000, n_mels=128, n_fft=2048, hop_length=512),
-            AmplitudeToDB() # mel spectrogram measures frequency amplitude over time, more informative for audio data
+            AmplitudeToDB(), # mel spectrogram measures frequency amplitude over time, more informative for audio data
+            TimeMasking(time_mask_param=30),         # Time masking for augmentation
+            FrequencyMasking(freq_mask_param=10)     # Frequency masking for augmentation
         )
         # convert waveform to mel spectrogram
         mel_spectrogram = transform(waveform)
-
-        # display the waveform
-        if not self.quiet:
-            self.display_waveform(waveform, ytid, start_sec, end_sec)
 
         # add the channel dimension if not present (needed for CNN)
         if mel_spectrogram.dim() == 2:
@@ -103,7 +105,7 @@ class AudioDataset(Dataset):
             mel_spectrogram = mel_spectrogram[:, :, :self.target_length]
 
         # display the mel spectrogram
-        if not self.quiet:
+        if self.display:
             self.display_spectrogram(mel_spectrogram, ytid, start_sec, end_sec, ids)
 
         # convert labels to float tensor
@@ -150,16 +152,14 @@ class AudioDataset(Dataset):
         return label_count
     def parse_dataset(self, csv_file):
         with open(csv_file, 'r') as f:
-            lines = f.readlines()[3:]  # skip header lines
+            lines = f.readlines()[3:]
             for line in lines:
                 parts = line.strip().split(', ')
                 ytid = parts[0]
                 start_sec = float(parts[1])
                 end_sec = float(parts[2])
 
-                # an entry can have multiple labels, separated by commas
-                # currently only considers the first label with [0], TODO: investigate removal of [0]
-                labels = [parts[3].split(',')[0].replace("\"", "")]
+                labels = [label.replace("\"", "") for label in parts[3].split(',')]
 
                 self.data.append((ytid, start_sec, end_sec, labels))
     def data_labels(self):
@@ -170,36 +170,15 @@ class AudioDataset(Dataset):
         return len(id_to_name)
 
 # ====================== Model Architecture ======================
-class AudioClassifier(nn.Module):   # CNN model, inheriting from pytorch neural network base class
+class AudioClassifier(nn.Module):
     def __init__(self, num_classes):
         super(AudioClassifier, self).__init__()
-        # todo: modify architecture? fine-tune?
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=64, kernel_size=(3, 3), padding=(1, 1))
-        self.conv2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=(3, 3), padding=(1, 1))
-        self.conv3 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=(3, 3), padding=(1, 1))
-        self.bn1 = nn.BatchNorm2d(64)
-        self.bn2 = nn.BatchNorm2d(128)
-        self.bn3 = nn.BatchNorm2d(256)
-        self.pool = nn.AvgPool2d(kernel_size=(2, 2))    # used to be maxpool
-        self.dropout = nn.Dropout(p=0.2)        # used to be 0.5
-        self.activation = nn.ReLU()
-        self.fc1 = nn.Linear(256 * 16 * 75, 512)
-        self.fc2 = nn.Linear(512, num_classes)      # output layer, note the output is num_classes logits, 
-                                                    # where each index corresponding to a class
-
+        self.resnet = resnet18(weights=ResNet18_Weights.DEFAULT)
+        self.resnet.conv1 = nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
     def forward(self, x):
-        # generate feature map
-        x = self.pool(self.activation(self.bn1(self.conv1(x))))
-        x = self.pool(self.activation(self.bn2(self.conv2(x))))
-        x = self.pool(self.activation(self.bn3(self.conv3(x))))
-        
-        # flatten, then apply linear classifier
-        x = x.view(x.size(0), -1)
-        x = self.activation(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-
-        return x  # returns logits
+        x = self.resnet(x)
+        return x
 
 # ====================== Training ======================
 losses = []
@@ -224,50 +203,62 @@ def update_plot(loss, track='epoch'):
         plt.plot(losses, label='Batch Loss', color='blue')
     plt.legend()
     plt.pause(0.2)
-
 def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs, track='batch'):
     if track == 'batch' or track == 'epoch': init_plot()
+
+    scaler = GradScaler()
+
     for epoch in range(num_epochs):
         model.train()       # set model to training mode
         running_loss = 0.0  # used to track loss of network over time
-        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{num_epochs}", leave=True)
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{num_epochs}", leave=True, bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}')
+
         for spectrogram, labels in progress_bar:    # calls __getitem__ of AudioDataset
             # move tensors to GPU
             spectrogram, labels = spectrogram.to(device), labels.to(device)
 
             optimizer.zero_grad()               # zero the parameter gradients
-            outputs = model(spectrogram)        # forward pass
-            
-            labels = labels.squeeze(1)          # remove extra dimension
 
-            loss = criterion(outputs, labels)   # compute the loss
-            loss.backward()                     # backward pass
-            optimizer.step()                    # optimize the network's weights
+            # Mixed precision training
+            with autocast():
+                outputs = model(spectrogram)        # forward pass
+                labels = labels.squeeze(1)          # remove extra dimension
+                loss = criterion(outputs, labels)   # compute the loss
+            
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
+            # Clip gradients to avoid exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            # Update model parameters
+            scaler.step(optimizer)
+            scaler.update()
 
             # continue to track statistics
             batch_loss = loss.item()
             running_loss += loss.item() * spectrogram.size(0)
             progress_bar.set_postfix(loss=batch_loss)
             if track == 'batch': update_plot(batch_loss, track=track)
-        scheduler.step(loss)
+        scheduler.step()
         if track == 'epoch': update_plot(batch_loss, track=track)
         torch.save(model.state_dict(), f'./models/model_checkpoint_e{epoch}.pth')
+
     plt.savefig('batch_loss_plot.png')
 
 # ====================== Main ======================
 if __name__ == "__main__":
     source = 'balanced_train_segments'
-    dataset = AudioDataset(f'./data/{source}.csv', f'./sounds_{source}', quiet=True, reduced=False, target_length=600)
+    dataset = AudioDataset(f'./data/{source}.csv', f'./sounds_{source}', quiet=True, display=False, reduced=False, target_length=600)
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-
+    
     model = AudioClassifier(num_classes=len(id_to_name))
     criterion = nn.BCEWithLogitsLoss()
-    # optimizer = optim.SGD(model.parameters(), lr=0.01)        # stochastic gradient descent results in worse convergence
-    optimizer = optim.Adam(model.parameters(), lr=0.00005)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5) # used to be StepLR
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)
+    # optimizer = optim.AdamW(model.parameters(), lr=0.001)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     model = model.to(device)
 
-    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=10, track='batch')
+    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=5, track='batch')

@@ -1,13 +1,13 @@
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
+import torch
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from train import AudioDataset, AudioClassifier, one_hot_encoder
+from sklearn.metrics import accuracy_score, f1_score
 
 id_to_name = {}
-
-import torch
 
 def evaluate_model(model, epoch, dataloader, device, quiet=False):
     model.eval()
@@ -15,57 +15,54 @@ def evaluate_model(model, epoch, dataloader, device, quiet=False):
     all_labels = []
 
     with torch.no_grad():
-        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}", leave=True)
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}", leave=True, bar_format='{l_bar}{bar:30}{r_bar}{bar:-10b}')
         for idx, (inputs, labels) in enumerate(progress_bar):
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
 
-            # TODO: do this in such a way that supports multi-label classification
-            preds = torch.sigmoid(outputs).round()
-            preds = preds.cpu().numpy().astype(int).tolist()    # is there a way to do this without the cpu?
-            preds = one_hot_encoder.inverse_transform(preds)
+            sigmoid_outputs = torch.sigmoid(outputs)
+            preds = (sigmoid_outputs > 0.5).int()
+            if preds.sum().item() == 0:
+                preds[0][sigmoid_outputs.argmax()] = 1
 
-            trues = labels.cpu().numpy().astype(int).tolist()
-            trues = one_hot_encoder.inverse_transform(trues)
+            preds = preds.cpu().numpy()
+            trues = labels.cpu().numpy()
 
-            if not preds or not preds[0] or not trues or not trues[0]:
-                continue
+            pred_ids = []
+            true_ids = []
 
-            if not quiet:
-                print(f'{id_to_name[preds[0][0]]} --> {id_to_name[trues[0][0]]} --> {preds[0][0] == trues[0][0]}')
-            all_preds.extend(preds)
-            all_labels.extend(trues)
+            for pred, true in zip(preds, trues):
+                # Find indices of active labels
+                pred_active_indices = np.where(pred == 1)[0]
+                true_active_indices = np.where(true == 1)[0]
 
-    # Manually calculate accuracy
-    correct = sum([all_preds[i][0] == all_labels[i][0] for i in range(len(all_preds))])
-    total = len(all_preds)
-    overall_accuracy = correct / total if total > 0 else 0
+                # Translate indices to their corresponding label IDs
+                pred_labels = one_hot_encoder.inverse_transform(np.eye(len(pred))[pred_active_indices])
+                true_labels = one_hot_encoder.inverse_transform(np.eye(len(true))[true_active_indices])
 
-    # Manually calculate F1 score
-    tp, fp, fn = 0, 0, 0
-    for i in range(len(all_preds)):
-        if all_preds[i][0] == all_labels[i][0]:
-            tp += 1
-        else:
-            fp += 1
-            fn += 1
+                # Flatten lists of IDs
+                pred_ids.append(pred_labels.flatten())
+                true_ids.append(true_labels.flatten())
 
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    overall_f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+            pred_names = [[id_to_name[id] for id in pred] for pred in pred_ids]
+            true_names = [[id_to_name[id] for id in true] for true in true_ids]
 
-    # TODO: f1 is being calculated as equal to accuracy every time, investigate this
+            print(f"Predicted: {pred_names}")
+            print(f"True: {true_names}\n")
+
+    overall_accuracy = accuracy_score(all_labels, all_preds)
+    overall_f1 = f1_score(all_labels, all_preds, average='micro', zero_division=0)
 
     return overall_accuracy, overall_f1
 
 
 if __name__ == "__main__":
     multi = True
-    quiet = True
+    quiet = False   
     target_length = 600
-    dataset = 'eval_segments'
+    dataset = 'balanced_train_segments'
     test_dataset = AudioDataset(f'./data/{dataset}.csv', f'./sounds_{dataset}', target_length=target_length)
-    _, id_to_name = test_dataset.load_data()
+    id_to_name = test_dataset.id_to_name
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
     model = AudioClassifier(num_classes=test_dataset.get_label_count())
 
@@ -73,22 +70,22 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     if not multi:
+        epoch = 3
         model = model.to(device)
-
-        model_path = './models/model_checkpoint_e6.pth'
+        model_path = f'./models/model_checkpoint_e{epoch - 1}.pth'
         model.load_state_dict(torch.load(model_path))
 
-        accuracy, f1 = evaluate_model(model, test_dataloader, device, quiet=quiet)
+        accuracy, f1 = evaluate_model(model, epoch, test_dataloader, device, quiet=quiet)
         print(f"Test Accuracy: {accuracy:.4f}")
         print(f"Test F1 Score: {f1:.4f}")
     else:
         accuracy_scores = []
         f1_scores = []
-        epochs = range(0, 20)
+        epochs = range(0, 3)
 
         for epoch in epochs:
             model = model.to(device)
-            model_path = f'./models/model_checkpoint_e{i}.pth'
+            model_path = f'./models/model_checkpoint_e{epoch}.pth'
             model.load_state_dict(torch.load(model_path))
 
             accuracy, f1 = evaluate_model(model, epoch, test_dataloader, device, quiet=quiet)
