@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score, f1_score
 id_to_name = {}
 
 # load ontology
-with open('./data/ontology.json') as f: ontology = json.load(f)
+with open('./audio_classification/data/ontology.json') as f: ontology = json.load(f)
 
 child_ids = {}
 for item in ontology:
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     quiet = True   
     target_length = 600
     dataset = 'balanced_train_segments'
-    test_dataset = AudioDataset(f'./data/{dataset}.csv', f'./sounds_{dataset}', target_length=target_length)
+    test_dataset = AudioDataset(f'./audio_classification/data/{dataset}.csv', f'./audio_classification/sounds_{dataset}', target_length=target_length)
     id_to_name = test_dataset.id_to_name
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
     model = AudioClassifier(num_classes=test_dataset.get_label_count())
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     if not multi:
         epoch = 5
         model = model.to(device)
-        model_path = f'./models/model_checkpoint_e{epoch - 1}.pth'
+        model_path = f'./audio_classification/models/model_checkpoint_e{epoch - 1}.pth'
         model.load_state_dict(torch.load(model_path))
 
         accuracy, f1 = evaluate_model(model, epoch, test_dataloader, device, quiet=quiet)
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
         for epoch in epochs:
             model = model.to(device)
-            model_path = f'./models/model_checkpoint_e{epoch}.pth'
+            model_path = f'./audio_classification/models/model_checkpoint_e{epoch}.pth'
             model.load_state_dict(torch.load(model_path))
 
             accuracy, f1 = evaluate_model(model, epoch, test_dataloader, device, quiet=quiet)
@@ -134,5 +134,5 @@ if __name__ == "__main__":
         plt.ylabel('Score')
         plt.title('Accuracy and F1 Score per Epoch')
         plt.legend()
-        plt.savefig('./plots/accuracy_f1.png')
+        plt.savefig('./audio_classification/plots/accuracy_f1.png')
         plt.show()
