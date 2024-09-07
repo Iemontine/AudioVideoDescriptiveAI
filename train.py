@@ -96,12 +96,11 @@ class AudioDataset(Dataset):
         if mel_spectrogram.dim() == 2:
             mel_spectrogram = mel_spectrogram.unsqueeze(0)
 
-        # resize the mel spectrogram to the target length
-        if mel_spectrogram.shape[2] < self.target_length:   # pad if too short  
-            padding = self.target_length - mel_spectrogram.shape[2]
-            mel_spectrogram = torch.nn.functional.pad(mel_spectrogram, (0, padding))
+        if mel_spectrogram.shape[2] < self.target_length:   # loop content if too short  
+            num_repeats = int(np.ceil(self.target_length / mel_spectrogram.shape[2]))
+            mel_spectrogram = mel_spectrogram.repeat(1, 1, num_repeats)
+            mel_spectrogram = mel_spectrogram[:, :, :self.target_length]
         elif mel_spectrogram.shape[2] > self.target_length: # truncate if too long
-            # TODO: loop audio file instead of truncating
             mel_spectrogram = mel_spectrogram[:, :, :self.target_length]
 
         # display the mel spectrogram
@@ -173,8 +172,9 @@ class AudioDataset(Dataset):
 class AudioClassifier(nn.Module):
     def __init__(self, num_classes):
         super(AudioClassifier, self).__init__()
-        self.resnet = resnet18(weights=ResNet18_Weights.DEFAULT)
-        self.resnet.conv1 = nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        self.resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        self.resnet.conv1 = nn.Conv2d(1, 64, kernel_size=(3, 3), stride=(1, 1), padding=(2, 2), bias=False)
+        self.resnet.conv2 = nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
         self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
     def forward(self, x):
         x = self.resnet(x)
@@ -247,15 +247,16 @@ def train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs, 
 
 # ====================== Main ======================
 if __name__ == "__main__":
-    source = 'balanced_train_segments'
+    source = 'eval_segments'
     dataset = AudioDataset(f'./data/{source}.csv', f'./sounds_{source}', quiet=True, display=False, reduced=False, target_length=600)
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
     
     model = AudioClassifier(num_classes=len(id_to_name))
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    # optimizer = optim.AdamW(model.parameters(), lr=0.001)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
+    # optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.AdamW(model.parameters(), lr=0.0001)
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.2, verbose=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")

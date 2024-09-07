@@ -3,62 +3,54 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from moviepy.editor import VideoFileClip, ImageSequenceClip
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-from train import AudioDataset, AudioClassifier, one_hot_encoder
-from torchaudio.transforms import MelSpectrogram, AmplitudeToDB
-import torch.nn as nn
+from panns_inference import SoundEventDetection, labels
 import torchaudio
-import json
+import matplotlib.pyplot as plt
 import librosa
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-id_to_name = {}
-
-def video_to_images(video_path, output_dir, fps):
-    global id_to_name
+# Convert video to images and extract timestamps
+def video_to_images(video_path, output_dir, framewise_output, fps):
     clip = VideoFileClip(video_path)
     duration = clip.duration
-    frame_rate = clip.fps
-    # Compute the number of frames per segment (10 seconds segment)
-    frames_per_segment = int(frame_rate * 10)
-    
-    # Load the audio classifier model once
 
-    with open('ontology.json') as f: ontology = json.load(f)
-    id_to_name = {item['id']: item['name'] for item in ontology}
-    model = AudioClassifier(num_classes=len(id_to_name)).to(device)
-    model.load_state_dict(torch.load('./models/model_checkpoint_e6.pth'))
-    model.eval()
-    
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     images = []
-    font_size = int(clip.size[1] * 0.05)    # 5% the height of the video
+    font_size = int(clip.size[1] * 0.05)  # 5% the height of the video
     font = ImageFont.truetype("arial.ttf", font_size)
     position = (10, 10)
-    
-    # Keeps track of the current audio prediction
-    current_sound_effect = None
-    audio_segment_start = 0
-    
-    print(int(duration * fps))
+
+    timestamps = []
+
+    classwise_output = np.max(framewise_output, axis=0)
+    idxes = np.argsort(classwise_output)[::-1]
+    idxes = idxes[0:5]
+    ix_to_lb = {i : label for i, label in enumerate(labels)}
+    lines = []
+    for idx in idxes:
+        line, = plt.plot(framewise_output[:, idx], label=ix_to_lb[idx])
+        lines.append(line)
+
     for frame_number in range(int(duration * fps)):
         timestamp = frame_number / fps
+        timestamps.append(timestamp)
         img = clip.get_frame(timestamp)
         img_pil = Image.fromarray(img)
-        
-        # Update the audio segment and predict the sound effect
-        if frame_number % frames_per_segment == 0:
-            print(f"examining segment: {audio_segment_start} - {audio_segment_start + 10}")
-            sound_effect = predict_sound_effect(audio_segment_start, audio_segment_start + 10, video_path, model, device)
-            current_sound_effect = sound_effect
-            audio_segment_start += 10
 
-        timestamp_text = f"Time: {timestamp:.2f}s\nSound Effect: {current_sound_effect}"
+        # Add this calculation before the timestamp_text
+        frame_index = int(frame_number * len(framewise_output) / (duration * fps))
+        if frame_index < len(framewise_output):
+            frame_events = framewise_output[frame_index]
+            top_label_idx = np.argmax(frame_events)
+            top_label = labels[top_label_idx]
+        else:
+            top_label = "No Classification"
+
+        # Use top_label in the timestamp_text
+        timestamp_text = f"Time: {timestamp:.2f}s \nSound Effect: {top_label}"
 
         # Masking technique to draw inverted text on the image
         text_mask = Image.new("L", img_pil.size, 0)
@@ -72,88 +64,29 @@ def video_to_images(video_path, output_dir, fps):
         final_image.save(image_path, "JPEG")
         images.append(image_path)
 
-    return images, frame_rate, fps
+    return images, clip.fps, fps, timestamps
 
-def predict_sound_effect(start_sec, end_sec, video_path, model, device):
-    # Load the audio from the video segment
-    clip = VideoFileClip(video_path)
-    audio = clip.audio.subclip(start_sec, end_sec)
-    audio.write_audiofile("temp_audio.wav", fps=48000)
-
-    # Load the waveform and convert it to a mel spectrogram
-    waveform, sample_rate = torchaudio.load("temp_audio.wav", normalize=True)
-    
-    if waveform.shape[0] > 1:
-        waveform = torch.mean(waveform, dim=0)  # Convert to mono if stereo
-    if waveform.dim() == 1:
-        waveform = waveform.unsqueeze(0)  # Ensure it has a batch dimension
-    
-    # Define transform (same as in train.py)
-    transform = torch.nn.Sequential(
-        MelSpectrogram(sample_rate=16000, n_mels=128, n_fft=2048, hop_length=512),
-        AmplitudeToDB()
-    )
-    
-    mel_spectrogram = transform(waveform)
-
-    # Ensure the mel spectrogram has the correct target length
-    target_length = 600  # Use the same target length as in train.py
-    if mel_spectrogram.shape[2] < target_length:
-        padding = target_length - mel_spectrogram.shape[2]
-        mel_spectrogram = torch.nn.functional.pad(mel_spectrogram, (0, padding))
-    elif mel_spectrogram.shape[2] > target_length:
-        mel_spectrogram = mel_spectrogram[:, :, :target_length]
-
-    # print(f"Shape of mel_spectrogram: {mel_spectrogram.shape}")
-    # mel_spectrogram_np = mel_spectrogram[0].detach().numpy()
-    # plt.figure(figsize=(10, 5))
-    # plt.imshow(mel_spectrogram_np, aspect='auto', origin='lower',
-    #         extent=[0, mel_spectrogram_np.shape[1], 0, mel_spectrogram_np.shape[0]])
-    # plt.colorbar(format='%+2.0f dB')
-    # plt.title(f'Mel Spectrogram of File: of length {end_sec - start_sec} seconds')
-    # plt.xlabel('Time (frames)')
-    # plt.ylabel('Mel Frequency (bins)')
-    # plt.show()
-
-    # Add batch and channel dimensions if needed
-    mel_spectrogram = mel_spectrogram.unsqueeze(0).to(device)  # Add batch dimension
-    
-    with torch.no_grad():
-        outputs = model(mel_spectrogram)  # Forward pass through the model
-
-        print(outputs)
-        print()
-        print(torch.sigmoid(outputs))
-        print()
-        print(torch.sigmoid(outputs).round())
-
-        predicted_labels = torch.sigmoid(outputs).round()  # Sigmoid for multi-label classification
-
-        # Convert prediction to a human-readable label
-        preds = predicted_labels.cpu().numpy().astype(int).tolist() 
-        decoded_preds = one_hot_encoder.inverse_transform(preds)  # Decode one-hot to label index
-
-        # Map predicted indices to sound labels
-        predicted_sounds = [id_to_name[pred[0]] for pred in decoded_preds if pred[0] in id_to_name]
-
-    return ', '.join(predicted_sounds) if predicted_sounds else f"Unknown --> {start_sec} - {end_sec}" 
-
-input_video_path = "input.mp4"
-
-dataset = 'eval_segments'
-test_dataset = AudioDataset(f'./data/{dataset}.csv', f'./sounds_{dataset}', target_length=600)
-id_to_name = test_dataset.id_to_name
-
-VideoFileClip("30_second_animation_assignment.mp4").write_videofile(input_video_path, codec='libx264', logger=None)
+# Main execution
+input_video_path = "./videos/input.mp4"
 output_dir = "output"
+fps = 24
+
+audio_path = "extracted_audio.wav"
+video_clip = VideoFileClip(input_video_path)
+audio = video_clip.audio
+audio.write_audiofile(audio_path)
+(audio, _) = librosa.core.load(audio_path, sr=32000, mono=True)
+audio = audio[None, :]  # (batch_size, segment_samples)
+sed = SoundEventDetection(checkpoint_path='.\models\Cnn14_DecisionLevelMax.pth', device=device, interpolate_mode='nearest')
+framewise_output = sed.inference(audio)
+
 print("Converting video to image array...")
-images, original_fps, reduced_fps = video_to_images(input_video_path, output_dir, fps=24)
-clip = ImageSequenceClip(images, fps=24)
+images, original_fps, reduced_fps, timestamps = video_to_images(input_video_path, output_dir, framewise_output[0], fps=fps)
 print("Image array successfully created.")
 
-# from IPython.display import display, Video
-
-# sanity check: ensure the image array has been edited correctly
-output_video_path = "output.mp4"
-clip.write_videofile(output_video_path, codec='libx264', logger=None)
-# display(Video(output_video_path, width=500))
+clip = ImageSequenceClip(images, fps=reduced_fps)
+original_audio = VideoFileClip(input_video_path).audio
+output_video_path = "./videos/output.mp4"
+clip = clip.set_audio(original_audio)  # Set the original audio
+clip.write_videofile(output_video_path, codec='libx264')
+print(f"Output video saved as {output_video_path}")
