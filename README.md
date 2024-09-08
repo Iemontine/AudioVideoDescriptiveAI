@@ -24,24 +24,21 @@
     * ```export OPENAI_API_KEY="your_api_key_here"```
 </details>
 
-<details>
-<summary><h2>Files</h2></summary>
+## File Structure
 
-* #### File structure
-    * Regarding audio classification
-        * data - contains AudioSet dataset files (including ontology)
-        * models - checkpoint models are saved here
-        * plots - training and testing plots are saved here
-        * sounds_balanced_train_segments - contains all balanced dataset .flac audio files
-        * sounds_eval_segments - contains all evaluation dataset .flac audio files
+ * Regarding audio classification
+     * data - contains AudioSet dataset files (including ontology)
+     * models - checkpoint models are saved here
+     * plots - training and testing plots are saved here
+     * sounds_balanced_train_segments - contains all balanced dataset .flac audio files
+     * sounds_eval_segments - contains all evaluation dataset .flac audio files
 
-        * dataset.ipynb - dataset exploration helper
-        * test.py - contains model testing code
-        * train.py - contains model training code
-    * Regarding audio/video descriptive AI
-        * output - preprocessed frames from input video are saved here
-        * videos - place the input.mp4 here, will also contain output.mp4 consisting of preprocessed frames
+     * ``dataset.ipynb`` - dataset exploration helper
+     * ``test.py`` - contains model testing code
+     * ``train.py`` - contains model training code
+ * Regarding audio/video descriptive AI
+     * output - preprocessed frames from input video are saved here
+     * videos - place the input.mp4 here, will also contain output.mp4 consisting of preprocessed frames
 
-        * preprocess.ipynb - loads a model (either PANNs or a custom one) and places the timestamp & framewise audio classification on each frame
-        * ai.ipynb - loads the preprocessed frames, and uses OpenAI API to create a audio-video content aware description
-</details>
+     * ``preprocess.ipynb`` - loads a model (either PANNs or a custom one) and places the timestamp & framewise audio classification on each frame
+     * ``ai.ipynb`` - loads the preprocessed frames, and uses OpenAI API to create a audio-video content aware description
