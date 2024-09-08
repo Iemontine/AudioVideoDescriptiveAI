@@ -11,7 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchaudio.transforms import MelSpectrogram, AmplitudeToDB, TimeMasking, FrequencyMasking
 from torch.cuda.amp import GradScaler, autocast
 from sklearn.preprocessing import OneHotEncoder
-from torchvision.models import resnet18, ResNet18_Weights
+from torchvision.models import resnet50, ResNet50_Weights
 
 # load ontology
 with open('./audio_classification/data/ontology.json') as f: ontology = json.load(f)
@@ -173,7 +173,7 @@ class AudioDataset(Dataset):
 class AudioClassifier(nn.Module):
     def __init__(self, num_classes):
         super(AudioClassifier, self).__init__()
-        self.resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        self.resnet = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
         self.resnet.conv1 = nn.Conv2d(1, 64, kernel_size=(3, 3), stride=(1, 1), padding=(2, 2), bias=False) # CNN architecture
         # feature map is input to linear classifier
         # self.resnet.conv2 = nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
@@ -255,13 +255,13 @@ if __name__ == "__main__":
     
     model = AudioClassifier(num_classes=len(id_to_name))
     criterion = nn.BCEWithLogitsLoss()
-    # optimizer = optim.Adam(model.parameters(), lr=0.001)
-    optimizer = optim.AdamW(model.parameters(), lr=0.0001)
+    optimizer = optim.Adam(model.parameters(), lr=0.000025)
+    # optimizer = optim.AdamW(model.parameters(), lr=0.00001)
     # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.2)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     model = model.to(device)
 
-    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=5, track='batch')
+    train_model(model, dataloader, criterion, optimizer, scheduler, num_epochs=10, track='batch')
