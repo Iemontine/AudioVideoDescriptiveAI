@@ -1,5 +1,9 @@
 .venv
 output
+output_clips
+subAudio
+truncated_videos
+video_clips
 sounds*
 __pycache__
 models

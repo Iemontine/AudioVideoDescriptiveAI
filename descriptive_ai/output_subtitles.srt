@@ -1,0 +1,81 @@
+```srt
+1
+00:00:00,000 --> 00:00:01,333
+A girl sits on a bed, focused on her laptop. 
+
+2
+00:00:01,333 --> 00:00:02,666
+Raindrops begin to pour against the window. 
+
+3
+00:00:02,666 --> 00:00:04,000
+Suddenly, a loud explosion is heard. 
+
+4
+00:00:04,000 --> 00:00:05,333
+She turns around, startled by the noise. 
+
+5
+00:00:05,333 --> 00:00:06,666
+The rain continues to fall as thunder rumbles. 
+
+6
+00:00:06,666 --> 00:00:09,000
+The girl stands up, walking towards the window. 
+
+7
+00:00:09,000 --> 00:00:10,866
+Outside, the rain pours heavily onto the plants. 
+
+8
+00:00:10,866 --> 00:00:12,000
+She seems captivated by the view. 
+
+9
+00:00:12,000 --> 00:00:13,333
+A close-up shows her smiling gently. 
+
+10
+00:00:13,333 --> 00:00:14,666
+She appears to enjoy being in the rain. 
+
+11
+00:00:14,666 --> 00:00:16,000
+Next, she's shown putting on a raincoat. 
+
+12
+00:00:16,000 --> 00:00:17,333
+The sounds of the rain persist. 
+
+13
+00:00:17,333 --> 00:00:18,666
+She steps into bright yellow rain boots. 
+
+14
+00:00:18,666 --> 00:00:20,000
+The camera focuses on her feet planting on the floor. 
+
+15
+00:00:20,000 --> 00:00:21,333
+She walks confidently outside. 
+
+16
+00:00:21,333 --> 00:00:22,666
+The view shifts to show her leaving the house. 
+
+17
+00:00:22,666 --> 00:00:24,000
+Rain continues to soak everything around. 
+
+18
+00:00:24,000 --> 00:00:25,333
+As she steps on the porch, she pauses. 
+
+19
+00:00:25,333 --> 00:00:26,666
+She looks thrilled and ready for adventure. 
+
+20
+00:00:26,666 --> 00:00:28,000
+The screen fades to black with a sound of drizzle. 
+```
