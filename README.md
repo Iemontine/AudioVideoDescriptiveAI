@@ -42,3 +42,4 @@
 
      * ``preprocess.ipynb`` - loads a model (either PANNs or a custom one) and places the timestamp & framewise audio classification on each frame
      * ``ai.ipynb`` - loads the preprocessed frames, and uses OpenAI API to create a audio-video content aware description
+     * ``createVideo.ipynb`` - automatically edit the original video using the srt file and generate sound file using text-to-speech API.
