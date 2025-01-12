@@ -6,6 +6,25 @@
 
 Formal research artifact can be found here: [Embedded TemporalAudio Context for Enhanced Video Content Description by LLM.pdf](https://github.com/user-attachments/files/18388456/Embedded.TemporalAudio.Context.for.Enhanced.Video.Content.Description.by.LLM.pdf)
 
+## Proposed methodology for dataset ([Audioset](https://research.google.com/audioset/)) conversion to Log Mel Spectrogram
+<img src="https://github.com/user-attachments/assets/640d08bb-1a75-452f-8dc8-6e1a6d208978" alt="proposed methodology" width="700" /></br>
+
+## Training Results vs PANNs Utilization
+<img src="https://github.com/user-attachments/assets/49624999-aaa3-4870-baa5-2f01e3dbcbd3" alt="Custom architecture training vs PANNs" width="700" /></br>
+
+## Example of embedding
+<img src="https://github.com/user-attachments/assets/8d287fea-e483-4041-a391-0715e5fa69cc" alt="Example embedding" width="700" /></br>
+
+
+## Example output with embeddings
+1 00:00:00,000 –> 00:00:01,333 A young girl sits on a couch, focused on her laptop.
+2 00:00:01,333 –> 00:00:02,666 Rain pours heavily against the window.
+3 00:00:02,666 –> 00:00:04,000 An explosion of sound surprises her, and she reacts.
+4 00:00:04,000 –> 00:00:05,333 Thunder rumbles as she looks around.
+5 00:00:05,333 –> 00:00:06,666 She turns away from the window, feeling uneasy.
+6 00:00:06,666 –> 00:00:08,000 Outside the window, rain continues to fall.
+..................
+
 
 # Development Environment Setup
 
