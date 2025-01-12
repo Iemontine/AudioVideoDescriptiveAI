@@ -1,3 +1,12 @@
+# Embedded Temporal/Audio Context for Enhanced Video Content Description by LLM
+
+* A hacky yet novel solution for providing additional temporal and audio context to LLM models capable of understanding visual data by embeddeding data directly into video frames.
+* Attempted to identify sound effects present within video content via Resnet50 architecture trained on Log-mel spectrograms to classify diverse frequency patterns within underlying audio data.
+* Resulted in noticably more detailed descriptions of videos, albeit susceptible to LLM (GPT-4o) hallucination. Audio classification models utilized suffer from 'cocktail party effect' issues.
+
+Formal research artifact can be found here: [Embedded TemporalAudio Context for Enhanced Video Content Description by LLM.pdf](https://github.com/user-attachments/files/18388456/Embedded.TemporalAudio.Context.for.Enhanced.Video.Content.Description.by.LLM.pdf)
+
+
 # Development Environment Setup
 
 <details><summary><h2>Setting up Virtual Environment</h2></summary>
